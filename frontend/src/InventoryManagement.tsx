@@ -524,15 +524,7 @@ export default function InventoryManagement() {
 
   return (
     <main className="inventory">
-      <header className="inv-header">
-        <div className="inv-title">
-          <span className="inv-mark" aria-hidden="true">
-            <CubeIcon />
-          </span>
-          <div>
-            <h2>Depot stock</h2>
-          </div>
-        </div>
+      <header className="inv-header inv-header-toolbar">
         <div className="inv-header-actions">
           <label className="inv-search">
             <span className="sr-only">Search items, classes, or locations</span>
