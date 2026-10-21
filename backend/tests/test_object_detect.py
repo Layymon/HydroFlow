@@ -10,6 +10,7 @@ from app.services.object_detect import (
     choose_detection,
     detect_image,
     detect_video,
+    resolve_category_weights,
 )
 
 
@@ -42,6 +43,28 @@ def test_a_photo_with_no_confident_box_is_rejected() -> None:
         choose_detection([Detection("cup", 0.2)])
     with pytest.raises(ObjectDetectError, match="No inventory item"):
         choose_detection([])
+
+
+def test_resolve_category_weights_prefers_yolo_runs(monkeypatch, tmp_path: Path) -> None:
+    yolo = tmp_path / "ml" / "runs" / "yolo" / "repair20_foods" / "weights"
+    yolo.mkdir(parents=True)
+    yolo_weights = yolo / "best.pt"
+    yolo_weights.write_bytes(b"yolo")
+    served = tmp_path / "ml" / "models" / "object_detect" / "foods"
+    served.mkdir(parents=True)
+    (served / "best.pt").write_bytes(b"served")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "app.services.object_detect.yolo_runs_root",
+        lambda: tmp_path / "ml" / "runs" / "yolo",
+    )
+    monkeypatch.setattr(
+        "app.services.object_detect.weights_root",
+        lambda: tmp_path / "ml" / "models" / "object_detect",
+    )
+
+    assert resolve_category_weights("foods") == yolo_weights
 
 
 def test_detect_image_counts_boxes_for_the_selected_class(monkeypatch, tmp_path: Path) -> None:

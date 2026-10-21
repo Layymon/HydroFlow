@@ -21,5 +21,10 @@ Push-Location backend
 Pop-Location
 ```
 
+Inventory object detection needs the YOLO weights under `ml/runs/yolo` (or promoted
+copies in `ml/models/object_detect`) plus the `ultralytics` and
+`opencv-python-headless` packages from `backend/requirements.txt`. Restart the API
+after installing or updating those dependencies.
+
 The API is an academic prototype. It is not an operational warning, caseload,
 dispatch, or public-safety service.

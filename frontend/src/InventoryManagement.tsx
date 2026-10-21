@@ -137,26 +137,6 @@ function subclassLabel(
   return { name: item?.name ?? itemCode, unit: item?.unit ?? "" };
 }
 
-function captureFrame(video: HTMLVideoElement): Promise<Blob> {
-  const width = video.videoWidth;
-  const height = video.videoHeight;
-  if (!width || !height) {
-    return Promise.reject(new Error("The camera frame is not ready yet."));
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) return Promise.reject(new Error("Could not capture a frame."));
-  context.drawImage(video, 0, 0, width, height);
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) reject(new Error("Could not capture a frame."));
-      else resolve(blob);
-    }, "image/jpeg", 0.92);
-  });
-}
-
 function Glyph({ tone, compact, children }: { tone: string; compact?: boolean; children: ReactNode }) {
   return (
     <span className={`item-glyph tone-${tone}${compact ? " is-compact" : ""}`} aria-hidden="true">
@@ -238,58 +218,55 @@ export default function InventoryManagement() {
   const [addMode, setAddMode] = useState<"detect" | "manual" | null>(null);
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
-  const [cameraError, setCameraError] = useState("");
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [scanPhoto, setScanPhoto] = useState<Blob | null>(null);
+  const [previewUrl, setPreviewUrl] = useState("");
   const [manualClass, setManualClass] = useState("");
   const [manualItem, setManualItem] = useState("");
   const [manualQuantity, setManualQuantity] = useState("");
   const [detectClass, setDetectClass] = useState("");
   const [detection, setDetection] = useState<DetectionView | null>(null);
   const [formError, setFormError] = useState("");
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const regionRef = useRef(region);
   const snapshotRef = useRef<InventorySnapshot | undefined>(undefined);
-  const streamRef = useRef<MediaStream | null>(null);
   const mounted = useRef(true);
   regionRef.current = region;
   snapshotRef.current = resource.data;
-  streamRef.current = stream;
 
-  const stopCamera = useCallback(() => {
-    setStream((current) => {
-      current?.getTracks().forEach((track) => track.stop());
-      return null;
-    });
+  const clearScanPhoto = useCallback(() => {
+    setScanPhoto(null);
+    setPreviewUrl("");
   }, []);
 
   const closeAdd = useCallback(() => {
-    stopCamera();
+    clearScanPhoto();
     setAddOpen(false);
     setAddMode(null);
     setDetecting(false);
-    setCameraError("");
     setFormError("");
     setManualClass("");
     setManualItem("");
     setManualQuantity("");
     setDetectClass("");
     setDetection(null);
-  }, [stopCamera]);
+  }, [clearScanPhoto]);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      streamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
 
   useEffect(() => {
-    const node = videoRef.current;
-    if (!node || !stream) return;
-    node.srcObject = stream;
-    void node.play().catch(() => undefined);
-  }, [stream]);
+    if (!scanPhoto) {
+      setPreviewUrl("");
+      return;
+    }
+    const url = URL.createObjectURL(scanPhoto);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [scanPhoto]);
 
   useEffect(() => {
     if (!addOpen) return;
@@ -437,42 +414,20 @@ export default function InventoryManagement() {
     }
   };
 
-  const startDetect = async () => {
-    setFormError("");
-    setCameraError("");
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraError("This browser has no camera.");
-      return;
-    }
-    try {
-      const next = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false,
-      });
-      setStream(next);
-    } catch {
-      setCameraError("Camera permission was blocked.");
-    }
-  };
-
   const runDetect = async () => {
     setFormError("");
-    setCameraError("");
     if (!detectClass) {
       setFormError("Choose a class.");
       return;
     }
-    const video = videoRef.current;
-    if (!video) {
-      setFormError("Start the camera before detecting an object.");
+    if (!scanPhoto) {
+      setFormError("Take or upload a photo before detecting.");
       return;
     }
     setDetecting(true);
     setDetection(null);
     try {
-      if (!video.videoWidth) await video.play().catch(() => undefined);
-      const image = await captureFrame(video);
-      const result = await api.detectInventory(detectClass, image);
+      const result = await api.detectInventory(detectClass, scanPhoto);
       const label = subclassLabel(snapshotRef.current, result.category_code, result.item_code);
       if (!mounted.current) return;
       setDetection({
@@ -761,7 +716,7 @@ export default function InventoryManagement() {
                     <svg viewBox="0 0 24 24"><path d="M4 8V5h3M20 8V5h-3M4 16v3h3M20 16v3h-3M12 9v6M9 12h6" /></svg>
                   </span>
                   <h3>Detect Object</h3>
-                  <p>Use the camera on clothes, foods, or utility.</p>
+                  <p>Scan a photo of clothes, foods, or utility.</p>
                 </button>
                 <button type="button" className="add-card add-choice" onClick={() => setAddMode("manual")}>
                   <span className="choice-icon" aria-hidden="true">
@@ -775,19 +730,20 @@ export default function InventoryManagement() {
             {addMode !== null && (
             <div className="add-grid single">
               <section className="add-card">
-                <button type="button" className="text-link" onClick={() => { stopCamera(); setAddMode(null); setFormError(""); }}>
+                <button type="button" className="text-link" onClick={() => { clearScanPhoto(); setAddMode(null); setFormError(""); }}>
                   Choose another way
                 </button>
                 {addMode === "detect" && (
                 <>
                 <h3>Detect Object</h3>
-                <p>Use the camera on clothes, foods, or utility. Stock is saved only after you confirm.</p>
+                <p>Take or upload a photo of clothes, foods, or utility. Stock is saved only after you confirm.</p>
                 <label>
                   Class
                   <select
                     value={detectClass}
                     onChange={(event) => {
                       setDetectClass(event.target.value);
+                      clearScanPhoto();
                       setDetection(null);
                       setFormError("");
                     }}
@@ -799,8 +755,8 @@ export default function InventoryManagement() {
                   </select>
                 </label>
                 <div className="detect-stage">
-                  {stream ? (
-                    <video ref={videoRef} autoPlay playsInline muted />
+                  {previewUrl ? (
+                    <img src={previewUrl} alt="Photo to scan" />
                   ) : (
                     <div className="detect-art" aria-hidden="true">
                       <svg viewBox="0 0 120 72">
@@ -811,7 +767,22 @@ export default function InventoryManagement() {
                     </div>
                   )}
                 </div>
-                {cameraError && <p className="camera-note">{cameraError}</p>}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      setScanPhoto(file);
+                      setDetection(null);
+                      setFormError("");
+                    }
+                    event.target.value = "";
+                  }}
+                />
                 {detection && detectClass === detection.category_code && (
                   <div>
                     <p>Subclass <strong>{detection.name}</strong></p>
@@ -827,15 +798,16 @@ export default function InventoryManagement() {
                     </button>
                   </div>
                 )}
-                {stream ? (
-                  <button type="button" onClick={() => void runDetect()} disabled={detecting || saving}>
-                    {detecting ? "Detecting…" : "Detect Object"}
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => void startDetect()}>
-                    Start camera
-                  </button>
-                )}
+                <button type="button" onClick={() => fileInputRef.current?.click()}>
+                  {previewUrl ? "Choose another photo" : "Take or upload photo"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runDetect()}
+                  disabled={detecting || saving || !scanPhoto || !detectClass}
+                >
+                  {detecting ? "Detecting…" : "Detect Object"}
+                </button>
                 </>
                 )}
                 {addMode === "manual" && (

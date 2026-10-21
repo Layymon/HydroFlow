@@ -46,6 +46,27 @@ def weights_root() -> Path:
     return here.parents[3] / "ml" / "models" / "object_detect"
 
 
+def yolo_runs_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "ml" / "runs" / "yolo"
+        if candidate.is_dir():
+            return candidate
+    return here.parents[3] / "ml" / "runs" / "yolo"
+
+
+def resolve_category_weights(category_code: str) -> Path:
+    """Prefer trained runs under ml/runs/yolo, then promoted ml/models weights."""
+    override = os.environ.get("OBJECT_DETECT_WEIGHTS")
+    if override:
+        return Path(override) / category_code / "best.pt"
+    for run_name in (f"repair20_{category_code}", f"epoch20_{category_code}"):
+        candidate = yolo_runs_root() / run_name / "weights" / "best.pt"
+        if candidate.is_file():
+            return candidate
+    return weights_root() / category_code / "best.pt"
+
+
 def choose_detection(
     boxes: list[Detection],
     *,
@@ -136,7 +157,7 @@ def detect_image(image: bytes, category_code: str) -> dict[str, object]:
         raise ObjectDetectError("Choose a photo.")
     if len(image) > MAX_IMAGE_BYTES:
         raise ObjectDetectError("That photo is too large.")
-    weights = weights_root() / category_code / "best.pt"
+    weights = resolve_category_weights(category_code)
     if not weights.is_file():
         raise ObjectDetectError(
             "The detection model for this class is not installed.",
@@ -172,7 +193,7 @@ def detect_video(video: bytes, category_code: str) -> dict[str, object]:
     except ImportError as exc:
         raise ObjectDetectError("The video detection runtime is not installed.", status_code=503) from exc
 
-    weights = weights_root() / category_code / "best.pt"
+    weights = resolve_category_weights(category_code)
     if not weights.is_file():
         raise ObjectDetectError("The detection model for this class is not installed.", status_code=503)
 
