@@ -3,10 +3,9 @@ import { formatPercent, riskLabel } from "./mapUtils";
 
 interface DailyDetailPanelProps {
   day: PredictionTimelineDay | undefined;
-  inTrainingSet?: boolean;
 }
 
-export default function DailyDetailPanel({ day, inTrainingSet }: DailyDetailPanelProps) {
+export default function DailyDetailPanel({ day }: DailyDetailPanelProps) {
   if (!day) {
     return <p className="state">Select a date to view the joined outlook.</p>;
   }
@@ -27,11 +26,6 @@ export default function DailyDetailPanel({ day, inTrainingSet }: DailyDetailPane
           </div>
         ))}
       </div>
-      <p className="hint">
-        {inTrainingSet
-          ? "Academic score, not an official warning."
-          : "Out-of-sample estimate, not an official warning."}
-      </p>
     </>
   );
 }

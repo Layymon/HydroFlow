@@ -6,9 +6,11 @@ import { errorText } from "./lib/formatError";
 import { demoAffectedPeople } from "./lib/demoAffected";
 import { depotRegionForCoordinates, type DepotRegion } from "./lib/depotRegion";
 import { splitAffectedBySex } from "./lib/populationSplit";
+import { riskLabel } from "./components/prediction/mapUtils";
 import type {
   AllocationPlanResponse,
   AssistancePriority,
+  AllocationTownshipRow,
   CensusResponse,
   HelpDay,
   InventorySnapshot,
@@ -42,7 +44,12 @@ function findTownshipCensus(census: CensusResponse | undefined, nameEn: string):
   return undefined;
 }
 
-const PRIORITY_OPTIONS: AssistancePriority[] = ["moderate", "high", "severe"];
+/** Plans include high and severe townships only (backend min_priority threshold). */
+const ALLOCATION_MIN_PRIORITY: AssistancePriority = "high";
+
+function isHighOrSeverePriority(priority: AssistancePriority): boolean {
+  return priority === "high" || priority === "severe";
+}
 
 type RegionCode = DepotRegion;
 
@@ -67,11 +74,11 @@ function depotLabel(region: RegionCode): string {
   return region === "east" ? "Bago (east)" : "Pyay (west)";
 }
 
-function planRequestBody(startDate: string, minPriority: AssistancePriority, focus: AllocationFocus | null | undefined) {
+function planRequestBody(startDate: string, focus: AllocationFocus | null | undefined) {
   return {
     date: startDate,
     warehouse_region: "auto" as const,
-    min_priority: minPriority,
+    min_priority: ALLOCATION_MIN_PRIORITY,
     // Focused view: one date + one township. Region view: all high/severe townships that day.
     include_all_high_severe: !focus,
     township_ids: focus ? [focus.townshipId] : undefined,
@@ -82,24 +89,16 @@ function planRequestBody(startDate: string, minPriority: AssistancePriority, foc
 
 export default function ResourceAllocationDashboard({
   startDate,
-  onStartDate,
   focus,
   onClearFocus,
   onOpenInventory,
 }: ResourceAllocationDashboardProps) {
-  const [minPriority, setMinPriority] = useState<AssistancePriority>(focus ? "high" : "moderate");
   const [inventoryEast, setInventoryEast] = useState<Resource<InventorySnapshot>>(loading);
   const [inventoryWest, setInventoryWest] = useState<Resource<InventorySnapshot>>(loading);
   const [plan, setPlan] = useState<Resource<AllocationPlanResponse>>({ state: "empty" });
   const [census, setCensus] = useState<Resource<CensusResponse>>({ state: "empty" });
   const [helpOutlook, setHelpOutlook] = useState<Resource<HelpDay>>({ state: "empty" });
   const [mapScores, setMapScores] = useState<Resource<PredictionMapScoresResponse>>(loading);
-
-  useEffect(() => {
-    if (focus) {
-      setMinPriority("high");
-    }
-  }, [focus?.townshipId, focus?.date]);
 
   const refreshInventory = async () => {
     setInventoryEast(loading);
@@ -184,10 +183,10 @@ export default function ResourceAllocationDashboard({
     };
   }, [focus]);
 
-  const runPlan = async (priority: AssistancePriority) => {
+  const runPlan = async () => {
     setPlan(loading);
     try {
-      const result = await api.allocationPlan(planRequestBody(startDate, priority, focus));
+      const result = await api.allocationPlan(planRequestBody(startDate, focus));
       setPlan({ state: "ready", data: result });
       await refreshInventory();
     } catch (reason) {
@@ -197,7 +196,7 @@ export default function ResourceAllocationDashboard({
 
   const submitPlan = async (event?: FormEvent) => {
     event?.preventDefault();
-    await runPlan(minPriority);
+    await runPlan();
   };
 
   const highRiskScores = useMemo(() => {
@@ -205,6 +204,12 @@ export default function ResourceAllocationDashboard({
       (score) => score.probability_risk_level === "high" || score.probability_risk_level === "severe",
     );
   }, [mapScores.data]);
+
+  const planRows = plan.data?.rows ?? [];
+  const highSeverityPlanRows = useMemo(
+    (): AllocationTownshipRow[] => planRows.filter((row) => isHighOrSeverePriority(row.priority)),
+    [planRows],
+  );
 
   const mapStops = useMemo((): MapStop[] => {
     const depots =
@@ -243,7 +248,7 @@ export default function ResourceAllocationDashboard({
       });
     }
 
-    for (const row of plan.data?.rows ?? []) {
+    for (const row of highSeverityPlanRows) {
       if (seen.has(row.township_id)) continue;
       seen.add(row.township_id);
       stops.push({
@@ -255,7 +260,7 @@ export default function ResourceAllocationDashboard({
       });
     }
     return stops;
-  }, [plan.data, highRiskScores, focus]);
+  }, [plan.data, highRiskScores, highSeverityPlanRows, focus]);
 
   const mapPaths = useMemo((): MapRoutePath[] => {
     const routes = plan.data?.routes ?? [];
@@ -270,8 +275,9 @@ export default function ResourceAllocationDashboard({
 
   const mapCenter = useMemo<[number, number]>(() => [17.8, 95.95], []);
 
-  const planRows = plan.data?.rows ?? [];
-  const focusRow = focus ? planRows.find((row) => row.township_id === focus.townshipId) : undefined;
+  const focusRow = focus
+    ? highSeverityPlanRows.find((row) => row.township_id === focus.townshipId)
+    : undefined;
 
   const focusTownshipCensus = useMemo(
     () => findTownshipCensus(census.data, focus?.townshipName ?? ""),
@@ -319,7 +325,11 @@ export default function ResourceAllocationDashboard({
         ? inventoryWest.error
         : undefined;
 
-  const dispatchPreview = planRows.slice(0, 8);
+  const dispatchPreview = highSeverityPlanRows.slice(0, 8);
+
+  const priorityScopeLabel = focus
+    ? `${riskLabel(focus.riskLevel)} risk`
+    : "High and severe only";
 
   const visibleDepotRegions = useMemo((): RegionCode[] => {
     if (focus) {
@@ -341,7 +351,7 @@ export default function ResourceAllocationDashboard({
           <span className="source">
             {focus
               ? `${focus.townshipName} · ${focus.date} · depot → township`
-              : `${highRiskScores.length} high/severe · east→Bago · west→Pyay`}
+              : "East depot Bago · west depot Pyay"}
           </span>
         </div>
         <RouteMap
@@ -410,7 +420,11 @@ export default function ResourceAllocationDashboard({
               </div>
             </div>
           ) : (
-            <p className="hint">Open allocation from a high or severe flood prediction to focus one township.</p>
+            <p className="hint">
+              On <strong>Flood Prediction</strong>, pick a township on the map with <strong>high</strong> or{" "}
+              <strong>severe</strong> risk, then use <strong>Plan resource allocation</strong> to open a focused
+              route here.
+            </p>
           )}
           {plan.state === "error" && <p className="state error">Plan failed: {plan.error}</p>}
         </article>
@@ -454,30 +468,14 @@ export default function ResourceAllocationDashboard({
         </article>
 
         <article className="panel allocation-table-panel allocation-rail-panel allocation-dispatch-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Dispatch list</p>
-              <h2>Allocation plan</h2>
+          <div className="section-heading allocation-dispatch-head">
+            <h2>Allocation plan</h2>
+            <div className="allocation-priority-side">
+              <span className="field-label">Priority scope</span>
+              <strong className="allocation-priority-value">{priorityScopeLabel}</strong>
             </div>
           </div>
           <form className="allocation-plan-form" onSubmit={submitPlan}>
-            <label>
-              Planning date
-              <input type="date" value={startDate} onChange={(event) => onStartDate(event.target.value)} required />
-            </label>
-            <label>
-              Minimum priority
-              <select
-                value={minPriority}
-                onChange={(event) => setMinPriority(event.target.value as AssistancePriority)}
-              >
-                {PRIORITY_OPTIONS.map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
-              </select>
-            </label>
             <button type="submit" className="allocation-action primary" disabled={plan.state === "loading"}>
               {plan.state === "loading" ? "Planning…" : "Create plan & dispatch"}
             </button>

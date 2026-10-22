@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { CircleMarker, GeoJSON, MapContainer, Pane, Popup, TileLayer, useMap } from "react-leaflet";
+import { CircleMarker, GeoJSON, MapContainer, Pane, Popup, useMap } from "react-leaflet";
+import BasemapTileLayer from "./components/map/BasemapTileLayer";
+import MapViewportFix from "./components/map/MapViewportFix";
 import type { GeoJsonObject } from "geojson";
 import AllocationPrompt from "./components/prediction/AllocationPrompt";
 import DailyDetailPanel from "./components/prediction/DailyDetailPanel";
@@ -28,26 +30,6 @@ function preferredTownshipId(districts: BagoAreasResponse["districts"]): string 
   const bagoDistrict = districts.find((district) => district.name_en === "Bago");
   const bagoTownship = bagoDistrict?.townships.find((township) => township.name_en === "Bago");
   return bagoTownship?.id ?? districts[0]?.townships[0]?.id ?? "";
-}
-
-const OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const OSM_FALLBACK_TILES =
-  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}";
-
-function Basemap() {
-  const [url, setUrl] = useState(OSM_TILES);
-  const usingOsm = url === OSM_TILES;
-  return (
-    <TileLayer
-      attribution={usingOsm ? "© OpenStreetMap contributors" : "© OpenStreetMap contributors, © Esri"}
-      url={url}
-      eventHandlers={{
-        tileerror: () => {
-          if (usingOsm) setUrl(OSM_FALLBACK_TILES);
-        },
-      }}
-    />
-  );
 }
 
 function FitPoints({ points }: { points: [number, number][] }) {
@@ -126,8 +108,7 @@ function DayGroup({
         <div className="history-row region header" role="row">
           <span>Date</span>
           <span>Rainfall</span>
-          <span>HGB chance</span>
-          <span>Logistic</span>
+          <span>River discharge</span>
           <span>Risk</span>
         </div>
         {days.map((day) => (
@@ -139,8 +120,7 @@ function DayGroup({
           >
             <strong>{day.date}</strong>
             <span>{day.rainfall_mm == null ? "—" : `${day.rainfall_mm.toFixed(1)} mm`}</span>
-            <span>{formatPercent(day.flood_probability)}</span>
-            <span>{formatPercent(day.secondary_flood_probability ?? null)}</span>
+            <span>{day.discharge_m3_s == null ? "—" : `${day.discharge_m3_s.toFixed(1)} m³/s`}</span>
             <span className={`risk-pill risk-${day.probability_risk_level ?? "none"}`}>
               {riskLabel(day.probability_risk_level)}
             </span>
@@ -195,31 +175,40 @@ export default function FloodPredictionDashboard({
     selectedDay,
     scoresByTownship,
   } = usePredictionTimeline(areas.data, selectedTownship, districtFilter);
-  const inTrainingSet = Boolean(timeline.data?.in_training_set);
 
-  const visibleTownships = useMemo(() => {
+  const visibleDistricts = useMemo(() => {
     const districts = areas.data?.districts ?? [];
-    const shown =
-      districtFilter === "all" ? districts : districts.filter((district) => district.id === districtFilter);
-    return shown.flatMap((district) =>
-      district.townships.map((township) => ({
-        ...township,
-        districtId: district.id,
-        districtName: district.name_en,
-        color: districtColor(district.id),
-      })),
-    );
+    if (districtFilter === "all") return districts;
+    return districts.filter((district) => district.id === districtFilter);
   }, [areas.data, districtFilter]);
+
+  const visibleTownships = useMemo(
+    () =>
+      visibleDistricts.flatMap((district) =>
+        district.townships.map((township) => ({
+          ...township,
+          districtId: district.id,
+          districtName: district.name_en,
+          color: districtColor(district.id),
+        })),
+      ),
+    [visibleDistricts],
+  );
+
+  useEffect(() => {
+    if (districtFilter === "all" || !areas.data) return;
+    const district = areas.data.districts.find((item) => item.id === districtFilter);
+    if (!district) return;
+    const stillValid = district.townships.some((township) => township.id === selectedTownship);
+    if (!stillValid && district.townships[0]) {
+      setSelectedTownship(district.townships[0].id);
+    }
+  }, [districtFilter, areas.data, selectedTownship]);
 
   const mapPoints = useMemo<[number, number][]>(
     () => visibleTownships.map((township) => [township.latitude, township.longitude]),
     [visibleTownships],
   );
-
-  const selectableDistricts =
-    districtFilter === "all"
-      ? (areas.data?.districts ?? [])
-      : (areas.data?.districts ?? []).filter((district) => district.id === districtFilter);
 
   const chooseTownship = (id: string) => {
     setSelectedTownship(id);
@@ -267,7 +256,7 @@ export default function FloodPredictionDashboard({
           <div className="section-heading">
             <h2>Districts</h2>
           </div>
-          <div className="chip-row" role="group" aria-label="Bago districts">
+          <div className="chip-row" role="group" aria-label="Bago districts" data-testid="district-chips">
             <button
               type="button"
               className={districtFilter === "all" ? "active" : ""}
@@ -280,13 +269,7 @@ export default function FloodPredictionDashboard({
                 key={district.id}
                 type="button"
                 className={districtFilter === district.id ? "active" : ""}
-                onClick={() => {
-                  setDistrictFilter(district.id);
-                  if (!district.townships.some((township) => township.id === selectedTownship)) {
-                    const first = district.townships[0];
-                    if (first) chooseTownship(first.id);
-                  }
-                }}
+                onClick={() => setDistrictFilter(district.id)}
               >
                 {district.name_en}
               </button>
@@ -295,7 +278,8 @@ export default function FloodPredictionDashboard({
           {areas.state === "error" && <p className="state error">Unavailable: {areas.error}</p>}
           <div className="map-frame">
             <MapContainer center={[18.26, 96.07]} zoom={8} scrollWheelZoom={false} aria-label="Bago flood risk map">
-              <Basemap />
+              <BasemapTileLayer />
+              <MapViewportFix />
               <FitPoints points={mapPoints} />
               {inundation.data?.map((product) => (
                 <GeoJSON
@@ -410,29 +394,39 @@ export default function FloodPredictionDashboard({
                 </label>
                 <h2>Flood prediction</h2>
               </div>
-              <label className="township-side">
-                <span className="field-label">Township</span>
+              <label className="township-side township-choice">
+                <span className="field-label">Selected township</span>
                 <select
+                  id="selected-township-name"
+                  aria-label="Selected township"
                   value={selectedTownship}
-                  onChange={(event) => chooseTownship(event.target.value)}
                   disabled={!areas.data}
-                  aria-label="Township"
+                  onChange={(event) => chooseTownship(event.target.value)}
                 >
-                  {!areas.data && <option value="">Loading townships…</option>}
-                  {selectableDistricts.map((district) => (
-                    <optgroup key={district.id} label={`${district.name_en} District`}>
-                      {district.townships.map((township) => (
-                        <option key={township.id} value={township.id}>
-                          {township.name_en}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
+                  {!areas.data ? (
+                    <option value="">Loading…</option>
+                  ) : districtFilter === "all" ? (
+                    visibleDistricts.map((district) => (
+                      <optgroup key={district.id} label={`${district.name_en} District`}>
+                        {district.townships.map((township) => (
+                          <option key={township.id} value={township.id}>
+                            {township.name_en}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))
+                  ) : (
+                    visibleDistricts[0]?.townships.map((township) => (
+                      <option key={township.id} value={township.id}>
+                        {township.name_en}
+                      </option>
+                    ))
+                  )}
                 </select>
               </label>
             </div>
             {demoBanner ? <p className="state demo-banner">{demoBanner}</p> : null}
-            <DailyDetailPanel day={demoDay} inTrainingSet={inTrainingSet} />
+            <DailyDetailPanel day={demoDay} />
             <AllocationPrompt
               day={demoDay}
               townshipName={selectedTownshipMeta?.name ?? "Selected township"}
@@ -461,14 +455,6 @@ export default function FloodPredictionDashboard({
               </p>
             )}
             {timeline.state === "error" && <p className="state error">Unavailable: {timeline.error}</p>}
-            {timeline.data ? (
-              <p className="hint model-hint">
-                Primary: {timeline.data.model_version}
-                {timeline.data.secondary_model_version
-                  ? ` · Secondary: ${timeline.data.secondary_model_version}`
-                  : ""}
-              </p>
-            ) : null}
           </article>
 
           <article className="panel history-panel">

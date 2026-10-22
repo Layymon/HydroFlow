@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import FloodPredictionDashboard from "./FloodPredictionDashboard";
 import { riskLabel } from "./components/prediction/mapUtils";
 
@@ -209,6 +209,10 @@ const areas = {
   },
 };
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("FloodPredictionDashboard", () => {
   it("maps moderate risk to Medium label", () => {
     expect(riskLabel("moderate")).toBe("Medium");
@@ -228,7 +232,7 @@ describe("FloodPredictionDashboard", () => {
     expect(screen.getByRole("heading", { name: "Previous 7 days" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Next 7 days" })).toBeInTheDocument();
     expect(screen.getByTestId("map")).toBeInTheDocument();
-    expect(screen.getByTestId("basemap")).toHaveAttribute("data-url", "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+    expect(screen.getByTestId("basemap")).toHaveAttribute("data-url", "/map-tiles/osm/{z}/{x}/{y}.png");
     expect(screen.getByTestId("basemap")).toHaveAttribute("data-attribution", "© OpenStreetMap contributors");
 
     expect(await screen.findByRole("button", { name: /2026-10-18/ })).toBeInTheDocument();
@@ -254,8 +258,8 @@ describe("FloodPredictionDashboard", () => {
     expect(await screen.findByText(/No allocation needed/i)).toBeInTheDocument();
   });
 
-  it("filters the township dropdown when a district chip is selected", async () => {
-    render(
+  it("scopes the township dropdown to the active district chip", async () => {
+    const view = render(
       <FloodPredictionDashboard
         areas={areas}
         health={{ state: "ready", data: { status: "ok", service: "x", version: "1", database: { ready: true, missing_tables: [] }, models: { flood: true, help: true, allocation: true } } }}
@@ -265,13 +269,36 @@ describe("FloodPredictionDashboard", () => {
       />,
     );
 
-    const townshipSelect = await screen.findByRole("combobox", { name: "Township" });
-    expect(within(townshipSelect).getByRole("option", { name: "Bago" })).toBeInTheDocument();
-    expect(within(townshipSelect).getByRole("option", { name: "Taungoo" })).toBeInTheDocument();
+    const townshipSelect = () => screen.getByRole("combobox", { name: "Selected township" });
+    await waitFor(() => expect(townshipSelect()).toHaveValue("MMR007001701"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Taungoo" }));
-    expect(within(townshipSelect).queryByRole("option", { name: "Bago" })).not.toBeInTheDocument();
-    expect(within(townshipSelect).getByRole("option", { name: "Taungoo" })).toBeInTheDocument();
-    expect(townshipSelect).toHaveValue("MMR007004701");
+    const districtChips = within(view.container).getByTestId("district-chips");
+    fireEvent.click(within(districtChips).getByRole("button", { name: "Bago" }));
+    await waitFor(() => expect(townshipSelect()).toHaveValue("MMR007001701"));
+    expect(within(townshipSelect()).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Bago",
+      "Daik-U",
+    ]);
+
+    fireEvent.click(within(districtChips).getByRole("button", { name: "Taungoo" }));
+    await waitFor(() => expect(townshipSelect()).toHaveValue("MMR007004701"));
+    expect(within(townshipSelect()).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Taungoo",
+      "Htantabin",
+    ]);
+
+    fireEvent.change(townshipSelect(), { target: { value: "MMR007004702" } });
+    expect(townshipSelect()).toHaveValue("MMR007004702");
+
+    fireEvent.click(within(districtChips).getByRole("button", { name: "Bago" }));
+    await waitFor(() => expect(townshipSelect()).toHaveValue("MMR007001701"));
+
+    fireEvent.click(within(districtChips).getByRole("button", { name: "All districts" }));
+    expect(within(townshipSelect()).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Bago",
+      "Daik-U",
+      "Taungoo",
+      "Htantabin",
+    ]);
   });
 });

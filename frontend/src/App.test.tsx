@@ -10,7 +10,12 @@ vi.mock("react-leaflet", () => ({
   Polyline: () => null,
   GeoJSON: () => <div data-testid="geojson" />,
   Pane: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  useMap: () => ({ fitBounds: () => undefined }),
+  useMap: () => ({
+    fitBounds: () => undefined,
+    invalidateSize: () => undefined,
+    getSize: () => ({ x: 800, y: 600 }),
+    getContainer: () => document.createElement("div"),
+  }),
 }));
 
 vi.mock("./api", () => ({
@@ -443,5 +448,7 @@ describe("dashboard", () => {
     expect(screen.getByRole("heading", { name: "Affected population" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Allocation plan" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create plan & dispatch" })).toBeInTheDocument();
+    expect(screen.getByText("High and severe only")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   }, 30000);
 });
